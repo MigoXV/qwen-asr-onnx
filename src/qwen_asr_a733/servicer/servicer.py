@@ -7,11 +7,11 @@ from collections.abc import AsyncIterator
 import grpc
 
 from google.protobuf.duration_pb2 import Duration
-from qwen_asr.commands.utils import build_transformers_kwargs, build_vllm_kwargs
-from qwen_asr.configs import AppConfig
-from qwen_asr.configs.constants import BACKEND_TRANSFORMERS, BACKEND_VLLM
-from qwen_asr.inferencers.grpc_inferencer import GrpcInferencer
-from qwen_asr.protos.asr.ux_speech_pb2 import (
+from qwen_asr_a733.commands.utils import build_onnx_kwargs
+from qwen_asr_a733.configs import AppConfig
+from qwen_asr_a733.inferencers.grpc_inferencer import GrpcInferencer
+from qwen_asr_a733.inferencers.onnx import OnnxAsrPipeline
+from qwen_asr_a733.protos.asr.ux_speech_pb2 import (
     SpeechRecognitionAlternative,
     StreamingRecognizeResponse,
     StreamingRecognizeRequest,
@@ -19,7 +19,7 @@ from qwen_asr.protos.asr.ux_speech_pb2 import (
     StreamingRecognitionResult,
     WordInfo,
 )
-from qwen_asr.protos.asr.ux_speech_pb2_grpc import UxSpeechServicer
+from qwen_asr_a733.protos.asr.ux_speech_pb2_grpc import UxSpeechServicer
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +38,13 @@ class ASRServicer(UxSpeechServicer):
         self.inferencer = self._load_inferencer(config)
 
     def close(self) -> None:
-        return None
+        self.inferencer.close()
 
     @staticmethod
     def _load_inferencer(config: AppConfig) -> GrpcInferencer:
-        """按应用配置加载后端推理器。"""
+        """按应用配置加载 ONNX 推理器。"""
         logger.info("Loading model from %s …", config.model)
-        # transformers 后端
-        if config.backend == BACKEND_TRANSFORMERS:
-            from qwen_asr.inferencers.transformers import TransformersInferencer
-
-            inferencer = TransformersInferencer.LLM(
-                model=config.model,
-                **build_transformers_kwargs(config),
-            )
-        # vLLM 后端
-        elif config.backend == BACKEND_VLLM:
-            from qwen_asr.inferencers.vllm import VLLMInferencer
-
-            inferencer = VLLMInferencer.LLM(
-                model=config.model,
-                **build_vllm_kwargs(config),
-            )
-        else:
-            raise ValueError(f"Unsupported backend: {config.backend}")
+        inferencer = OnnxAsrPipeline(**build_onnx_kwargs(config))
         return GrpcInferencer(inferencer=inferencer)
 
     async def StreamingRecognize(
@@ -122,7 +105,7 @@ class ASRServicer(UxSpeechServicer):
         context: grpc.aio.ServicerContext,
     ) -> StreamingRecognitionConfig | None:
         """读取并校验第一条 streaming_config 请求。"""
-        config_request = await anext(request_iterator, None)
+        config_request = await ASRServicer._anext_or_none(request_iterator)
         if (
             config_request is None
             or config_request.WhichOneof("streaming_request") != "streaming_config"
@@ -141,7 +124,7 @@ class ASRServicer(UxSpeechServicer):
         context: grpc.aio.ServicerContext,
     ) -> bytes | None:
         """读取并校验唯一的 audio_content 请求。"""
-        audio_request = await anext(request_iterator, None)
+        audio_request = await ASRServicer._anext_or_none(request_iterator)
         if (
             audio_request is None
             or audio_request.WhichOneof("streaming_request") != "audio_content"
@@ -153,7 +136,7 @@ class ASRServicer(UxSpeechServicer):
             )
             return None
 
-        extra_request = await anext(request_iterator, None)
+        extra_request = await ASRServicer._anext_or_none(request_iterator)
         if extra_request is not None:
             logger.error("Only one audio_content message is supported, aborting RPC.")
             await context.abort(
@@ -162,6 +145,15 @@ class ASRServicer(UxSpeechServicer):
             )
             return None
         return audio_request.audio_content
+
+    @staticmethod
+    async def _anext_or_none(
+        iterator: AsyncIterator[StreamingRecognizeRequest],
+    ) -> StreamingRecognizeRequest | None:
+        try:
+            return await iterator.__anext__()
+        except StopAsyncIteration:
+            return None
 
     @staticmethod
     def _context_is_active(context: grpc.aio.ServicerContext) -> bool:

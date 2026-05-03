@@ -5,7 +5,7 @@ Qwen3-ASR gRPC 服务的 Typer CLI 入口。
 运行时配置从结构化 YAML 文件加载。
 
 示例：
-    python -m qwen_asr.commands.app serve --config config.yaml
+    python -m qwen_asr_a733.commands.app serve --config config.yaml
 """
 
 from __future__ import annotations
@@ -18,9 +18,11 @@ import grpc
 import typer
 from omegaconf import OmegaConf
 
-from qwen_asr.configs import AppConfig
-from qwen_asr.protos.asr.ux_speech_pb2_grpc import add_UxSpeechServicer_to_server
-from qwen_asr.servicer.servicer import ASRServicer
+from qwen_asr_a733.configs import AppConfig
+from qwen_asr_a733.protos.asr.ux_speech_pb2_grpc import (
+    add_UxSpeechServicer_to_server,
+)
+from qwen_asr_a733.servicer.servicer import ASRServicer
 
 logger = logging.getLogger(__name__)
 

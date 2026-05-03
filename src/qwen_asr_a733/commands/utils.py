@@ -1,30 +1,30 @@
 # coding=utf-8
 from __future__ import annotations
 
-from qwen_asr.configs import AppConfig
+from pathlib import Path
+
+from qwen_asr_a733.configs import AppConfig
 
 
-def build_vllm_kwargs(config: AppConfig) -> dict[str, object]:
-    vllm_config = config.vllm
-    if vllm_config is None:
-        raise ValueError("vLLM backend selected but vllm config is missing.")
+def build_onnx_kwargs(config: AppConfig) -> dict[str, object]:
+    model_root = config.model_path
+    tokenizer_path = model_root / "tokenizer.json"
+    onnx_dir = model_root / "onnx_models"
 
-    kwargs: dict[str, object] = {
+    if not model_root.exists():
+        raise FileNotFoundError(f"Model directory does not exist: {model_root}")
+    if not model_root.is_dir():
+        raise ValueError(f"Model path must be a directory: {model_root}")
+    if not tokenizer_path.is_file():
+        raise FileNotFoundError(f"tokenizer.json not found: {tokenizer_path}")
+    if not onnx_dir.is_dir():
+        raise FileNotFoundError(f"onnx_models directory not found: {onnx_dir}")
+
+    return {
+        "model_root": Path(model_root),
+        "onnx_dir": onnx_dir,
+        "tokenizer_path": tokenizer_path,
+        "num_threads": config.onnx.num_threads,
+        "quantize": config.onnx.quantize,
         "max_new_tokens": config.generation.max_new_tokens,
-        "gpu_memory_utilization": vllm_config.gpu_memory_utilization,
-        "max_model_len": vllm_config.max_model_len,
-        "device": config.device,
     }
-    if vllm_config.enforce_eager:
-        kwargs["enforce_eager"] = True
-
-    return kwargs
-
-
-def build_transformers_kwargs(config: AppConfig) -> dict[str, object]:
-    # 组装 Transformers 后端初始化参数，device 按配置原样交给后端处理。
-    kwargs: dict[str, object] = {
-        "max_new_tokens": config.generation.max_new_tokens,
-        "device": config.device,
-    }
-    return kwargs

@@ -1,14 +1,4 @@
 # coding=utf-8
-from qwen_asr.configs.runtime import (
-    AppConfig,
-    GenerationConfig,
-    TransformersConfig,
-    VLLMConfig,
-)
+from qwen_asr_a733.configs.runtime import AppConfig, GenerationConfig, OnnxConfig
 
-__all__ = [
-    "AppConfig",
-    "GenerationConfig",
-    "TransformersConfig",
-    "VLLMConfig",
-]
+__all__ = ["AppConfig", "GenerationConfig", "OnnxConfig"]

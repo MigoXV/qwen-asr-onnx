@@ -2,16 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
 
 from omegaconf import MISSING
 
-from qwen_asr.configs.constants import (
-    BACKEND_CHOICES,
-    BACKEND_TRANSFORMERS,
-    BACKEND_VLLM,
-    DEVICE_CPU,
-)
+from qwen_asr_a733.configs.constants import QUANTIZE_CHOICES, QUANTIZE_INT8
 
 
 @dataclass
@@ -20,42 +15,41 @@ class GenerationConfig:
 
 
 @dataclass
-class VLLMConfig:
-    gpu_memory_utilization: float = 0.9
-    max_model_len: int = 4096
-    enforce_eager: bool = False
+class OnnxConfig:
+    num_threads: int = 0
+    quantize: str = QUANTIZE_INT8
 
+    def __post_init__(self) -> None:
+        self.quantize = self.normalize_quantize(self.quantize)
+        if self.num_threads < 0:
+            raise ValueError("onnx.num_threads must be >= 0.")
 
-@dataclass
-class TransformersConfig:
-    pass
+    @staticmethod
+    def normalize_quantize(quantize: str) -> str:
+        normalized = (quantize or "").strip().lower()
+        if normalized not in QUANTIZE_CHOICES:
+            choices = ", ".join(sorted(QUANTIZE_CHOICES))
+            raise ValueError(
+                f"Invalid quantize value '{quantize}'. Expected one of: {choices}."
+            )
+        return normalized
 
 
 @dataclass
 class AppConfig:
     model: str = MISSING
-    backend: str = BACKEND_VLLM
     context: str = ""
     server_port: int = 50051
     generation: GenerationConfig = field(default_factory=GenerationConfig)
-    device: str = DEVICE_CPU
-    vllm: Optional[VLLMConfig] = None
-    transformers: Optional[TransformersConfig] = None
+    onnx: OnnxConfig = field(default_factory=OnnxConfig)
 
     def __post_init__(self) -> None:
-        self.backend = self.normalize_backend(self.backend)
+        raw_model = self.model
+        model = "" if raw_model is MISSING else str(raw_model or "").strip()
+        if not model or model == "???":
+            raise ValueError("model must point to the ONNX model root directory.")
+        self.model = model
 
-        if self.backend == BACKEND_VLLM and self.vllm is None:
-            self.vllm = VLLMConfig()
-        elif self.backend == BACKEND_TRANSFORMERS and self.transformers is None:
-            self.transformers = TransformersConfig()
-
-    @staticmethod
-    def normalize_backend(backend: str) -> str:
-        normalized = (backend or "").strip().lower()
-        if normalized not in BACKEND_CHOICES:
-            choices = ", ".join(sorted(BACKEND_CHOICES))
-            raise ValueError(
-                f"Invalid BACKEND value '{backend}'. Expected one of: {choices}."
-            )
-        return normalized
+    @property
+    def model_path(self) -> Path:
+        return Path(self.model).expanduser()
