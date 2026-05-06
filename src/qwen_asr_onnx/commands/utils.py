@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qwen_asr_a733.configs import AppConfig
+from qwen_asr_onnx.configs import AppConfig
 
 
 def build_onnx_kwargs(config: AppConfig) -> dict[str, object]:

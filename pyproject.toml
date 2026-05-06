@@ -3,33 +3,31 @@ name = "qwen-asr-a733"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "wcy",email = "wcy@gmail.com"}
+    {name = "wcy",email = "wcy@gmail.com"},
+    {name = "wcw",email = "1695587905@qq.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = ["numpy==1.26.4",
-"librosa",
-"sox",
-"tokenizers (>=0.21.4,<0.22)",
-"grpcio (>=1.78.0,<2.0.0)",
-"protobuf (>=6.33.5,<7.0.0)",
-"typer (>=0.24.0,<0.25.0)",
-"omegaconf (>=2.3.0,<3.0.0)",
-"onnxruntime (<1.24)",
+requires-python = ">=3.10, <3.13"
+dependencies = [
+    "numpy==1.26.4",
+    "librosa",
+    "sox",
+    "tokenizers (>=0.21.4,<0.22)",
+    "grpcio (>=1.78.0,<2.0.0)",
+    "protobuf (>=6.33.5,<7.0.0)",
+    "typer (>=0.24.0,<0.25.0)",
+    "omegaconf (>=2.3.0,<3.0.0)",
+    "onnxruntime (<1.24)",
 ]
+
 [[tool.poetry.source]]
 name = "tuna"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 priority = "primary"
+
 [tool.poetry]
-packages = [{include = "qwen_asr_a733", from = "src"}]
+packages = [{include = "qwen_asr_onnx", from = "src"}]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[dependency-groups]
-dev = [
-    "grpcio-tools (>=1.80.0,<2.0.0)",
-    "mypy-protobuf (>=5.1.0,<6.0.0)"
-]

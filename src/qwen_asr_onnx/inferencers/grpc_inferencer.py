@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-from qwen_asr_a733.inferencers.onnx import OnnxAsrPipeline
+from qwen_asr_onnx.inferencers.onnx import OnnxAsrPipeline
 
 
 class GrpcInferencer:

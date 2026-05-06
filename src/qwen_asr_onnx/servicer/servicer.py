@@ -7,11 +7,11 @@ from collections.abc import AsyncIterator
 import grpc
 
 from google.protobuf.duration_pb2 import Duration
-from qwen_asr_a733.commands.utils import build_onnx_kwargs
-from qwen_asr_a733.configs import AppConfig
-from qwen_asr_a733.inferencers.grpc_inferencer import GrpcInferencer
-from qwen_asr_a733.inferencers.onnx import OnnxAsrPipeline
-from qwen_asr_a733.protos.asr.ux_speech_pb2 import (
+from qwen_asr_onnx.commands.utils import build_onnx_kwargs
+from qwen_asr_onnx.configs import AppConfig
+from qwen_asr_onnx.inferencers.grpc_inferencer import GrpcInferencer
+from qwen_asr_onnx.inferencers.onnx import OnnxAsrPipeline
+from qwen_asr_onnx.protos.asr.ux_speech_pb2 import (
     SpeechRecognitionAlternative,
     StreamingRecognizeResponse,
     StreamingRecognizeRequest,
@@ -19,7 +19,7 @@ from qwen_asr_a733.protos.asr.ux_speech_pb2 import (
     StreamingRecognitionResult,
     WordInfo,
 )
-from qwen_asr_a733.protos.asr.ux_speech_pb2_grpc import UxSpeechServicer
+from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import UxSpeechServicer
 
 logger = logging.getLogger(__name__)
 
