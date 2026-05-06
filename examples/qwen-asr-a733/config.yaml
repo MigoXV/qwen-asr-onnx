@@ -1,0 +1,25 @@
+# Qwen3-ASR gRPC 服务示例配置。
+#
+# 启动命令：
+#   poetry run python -m qwen_asr_a733.commands.app serve --config examples/qwen-asr-a733/config.yaml
+
+# 模型根目录，目录内必须包含 tokenizer.json 和 onnx_models/。
+model: model-bin/Daumee/Qwen3-ASR-0.6B-ONNX-CPU
+
+# 默认上下文或热词。请求里传入 hotwords 时会优先使用请求热词。
+context: ""
+
+# gRPC 监听端口。
+server_port: 50051
+
+generation:
+  max_new_tokens: 4096
+
+onnx:
+  # 0 表示由 ONNX Runtime 自动选择线程数。
+  num_threads: 0
+  # 当前 Daumee 模型提供的是 int8 decoder 文件：
+  # onnx_models/decoder_init.int8.onnx
+  # onnx_models/decoder_step.int8.onnx
+  # 这里仅表示选择 int8 decoder 文件，不会在运行时重新量化模型。
+  quantize: int8

@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from qwen_asr_a733.protos.asr import ux_speech_pb2 as qwen__asr__a733_dot_protos_dot_asr_dot_ux__speech__pb2
+from qwen_asr_onnx.protos.asr import ux_speech_pb2 as qwen__asr__a733_dot_protos_dot_asr_dot_ux__speech__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__

@@ -7,7 +7,7 @@ from typing import Iterator
 import numpy as np
 import onnxruntime as ort
 
-from qwen_asr_a733.configs.constants import (
+from qwen_asr_onnx.configs.constants import (
     QUANTIZE_INT8,
     TARGET_SAMPLE_RATE,
 )

@@ -5,7 +5,7 @@ isort:skip_file
 
 from collections import abc as _abc
 from grpc import aio as _aio
-from qwen_asr_a733.protos.asr import ux_speech_pb2 as _ux_speech_pb2
+from qwen_asr_onnx.protos.asr import ux_speech_pb2 as _ux_speech_pb2
 import abc as _abc_1
 import grpc as _grpc
 import sys

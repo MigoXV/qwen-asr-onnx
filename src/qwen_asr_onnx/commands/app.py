@@ -18,11 +18,11 @@ import grpc
 import typer
 from omegaconf import OmegaConf
 
-from qwen_asr_a733.configs import AppConfig
-from qwen_asr_a733.protos.asr.ux_speech_pb2_grpc import (
+from qwen_asr_onnx.configs import AppConfig
+from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import (
     add_UxSpeechServicer_to_server,
 )
-from qwen_asr_a733.servicer.servicer import ASRServicer
+from qwen_asr_onnx.servicer.servicer import ASRServicer
 
 logger = logging.getLogger(__name__)
 

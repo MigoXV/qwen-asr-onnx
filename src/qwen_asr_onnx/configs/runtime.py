@@ -6,7 +6,7 @@ from pathlib import Path
 
 from omegaconf import MISSING
 
-from qwen_asr_a733.configs.constants import QUANTIZE_CHOICES, QUANTIZE_INT8
+from qwen_asr_onnx.configs.constants import QUANTIZE_CHOICES, QUANTIZE_INT8
 
 
 @dataclass
