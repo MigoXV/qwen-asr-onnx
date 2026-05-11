@@ -5,7 +5,7 @@ Qwen3-ASR gRPC 服务的 Typer CLI 入口。
 运行时配置从结构化 YAML 文件加载。
 
 示例：
-    python -m qwen_asr_a733.commands.app serve --config config.yaml
+    python -m qwen_asr_onnx.commands.app serve --config config.yaml
 """
 
 from __future__ import annotations
@@ -24,6 +24,12 @@ from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import (
 )
 from qwen_asr_onnx.servicer.servicer import ASRServicer
 
+LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s - %(message)s"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+)
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(
@@ -53,26 +59,32 @@ async def run_server(config: AppConfig) -> None:
 @app.command()
 def serve(
     config: Path = typer.Option(
-        ...,
+        "examples/qwen-asr-onnx/config.yaml",
         "--config",
         help="Qwen3-ASR YAML 配置文件路径。",
         exists=True,
         file_okay=True,
         dir_okay=False,
         readable=True,
-        envvar="QWEN_ASR_CONFIG",
+        envvar="CONFIG_PATH",
     ),
 ) -> None:
     """启动 Qwen3-ASR gRPC 服务。"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s - %(message)s",
-    )
+    logger.info("Loading config from %s", config)
     # 先合并默认结构化配置，再转换为应用配置对象。
     schema = OmegaConf.structured(AppConfig)
     loaded = OmegaConf.load(config)
     merged = OmegaConf.merge(schema, loaded)
     app_config = OmegaConf.to_object(merged)
+    logger.info(
+        "Config loaded: model=%s, server_port=%d, max_new_tokens=%d, "
+        "onnx.num_threads=%d, onnx.quantize=%s",
+        app_config.model,
+        app_config.server_port,
+        app_config.generation.max_new_tokens,
+        app_config.onnx.num_threads,
+        app_config.onnx.quantize,
+    )
 
     asyncio.run(run_server(app_config))
 

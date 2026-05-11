@@ -38,13 +38,26 @@ class ASRServicer(UxSpeechServicer):
         self.inferencer = self._load_inferencer(config)
 
     def close(self) -> None:
+        logger.info("Closing ASR servicer resources.")
         self.inferencer.close()
 
     @staticmethod
     def _load_inferencer(config: AppConfig) -> GrpcInferencer:
         """按应用配置加载 ONNX 推理器。"""
-        logger.info("Loading model from %s …", config.model)
-        inferencer = OnnxAsrPipeline(**build_onnx_kwargs(config))
+        logger.info(
+            "Loading model: model=%s, max_new_tokens=%d, onnx.num_threads=%d, "
+            "onnx.quantize=%s",
+            config.model,
+            config.generation.max_new_tokens,
+            config.onnx.num_threads,
+            config.onnx.quantize,
+        )
+        try:
+            inferencer = OnnxAsrPipeline(**build_onnx_kwargs(config))
+        except Exception as exc:
+            logger.error("Failed to load model: %s", exc, exc_info=True)
+            raise
+        logger.info("Model loaded successfully.")
         return GrpcInferencer(inferencer=inferencer)
 
     async def StreamingRecognize(
@@ -71,14 +84,31 @@ class ASRServicer(UxSpeechServicer):
             default_context=self.default_context,
             hotwords=streaming_config.config.hotwords,
         )
+        sample_rate = streaming_config.config.sample_rate_hertz
+        audio_duration_seconds = self._calculate_audio_duration_seconds(
+            audio_bytes=audio_bytes,
+            sample_rate=sample_rate,
+        )
+        logger.info(
+            "Starting inference: audio_bytes=%d, sample_rate=%d, language_code=%s, "
+            "audio_duration_seconds=%.3f, interim_results=%s, has_context=%s",
+            len(audio_bytes),
+            sample_rate,
+            streaming_config.config.language_code,
+            audio_duration_seconds,
+            streaming_config.interim_results,
+            bool(request_context),
+        )
+        final_transcript = ""
         try:
             async for transcript, delta, is_final in self.inferencer.infer(
                 audio_bytes=audio_bytes,
-                sample_rate=streaming_config.config.sample_rate_hertz,
+                sample_rate=sample_rate,
                 language_code=streaming_config.config.language_code,
                 interim_results=streaming_config.interim_results,
                 context=request_context,
             ):
+                final_transcript = transcript
                 # 客户端断开后停止继续推送识别结果。
                 if not self._context_is_active(context):
                     logger.info("Client disconnected; stopping response stream.")
@@ -89,7 +119,7 @@ class ASRServicer(UxSpeechServicer):
                     word=delta,
                 )
         except asyncio.CancelledError:
-            logger.info("StreamingRecognize cancelled by client.")
+            logger.error("StreamingRecognize cancelled by client.", exc_info=True)
             return
         except Exception as exc:
             logger.error("Inference failed: %s", exc, exc_info=True)
@@ -98,6 +128,23 @@ class ASRServicer(UxSpeechServicer):
                 f"Inference failed: {exc}",
             )
             return
+        logger.info(
+            "Inference finished: audio_duration_seconds=%.3f, transcript_chars=%d",
+            audio_duration_seconds,
+            len(final_transcript),
+        )
+
+    @staticmethod
+    def _calculate_audio_duration_seconds(
+        audio_bytes: bytes,
+        sample_rate: int,
+    ) -> float:
+        """按 LINEAR16 PCM 计算音频时长。"""
+        if sample_rate <= 0:
+            logger.error("Invalid sample_rate_hertz: %d", sample_rate)
+            return 0.0
+        bytes_per_sample = 2
+        return len(audio_bytes) / bytes_per_sample / sample_rate
 
     @staticmethod
     async def _load_streaming_config(
