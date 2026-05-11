@@ -289,17 +289,10 @@ class OnnxAsrPipeline:
 
             generated.append(next_token)
             raw_text = self.tokenizer.decode(generated)
-            if "language " in raw_text and "<asr_text>" in raw_text:
-                text = raw_text.split("<asr_text>", 1)[1]
-            elif raw_text.startswith("language "):
-                text = ""
-            else:
-                text = raw_text
-
-            new_text = text[len(emitted_text) :]
+            new_text = raw_text[len(emitted_text) :]
             for char in new_text:
                 yield char
-            emitted_text = text
+            emitted_text = raw_text
 
             token_embed = self.embed_tokens[next_token][np.newaxis, np.newaxis, :]
             pos = np.array([[cur_pos]], dtype=np.int64)

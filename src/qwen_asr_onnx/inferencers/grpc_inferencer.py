@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from qwen_asr_onnx.inferencers.onnx import OnnxAsrPipeline
+from qwen_asr_onnx.inferencers.text.transcript_parser import StreamingTranscriptParser
 
 
 class GrpcInferencer:
@@ -21,20 +22,20 @@ class GrpcInferencer:
         interim_results: bool = False,
         context: str = "",
     ) -> AsyncIterator[tuple[str, str, bool]]:
-        transcript = ""
+        transcript_parser = StreamingTranscriptParser(language_code=language_code)
 
         for delta in self.inferencer.transcribe(
             audio_bytes=audio_bytes,
             sample_rate=sample_rate,
-            language=language_code or None,
+            language=transcript_parser.force_language,
             context=context,
         ):
-            transcript += delta
-            if interim_results:
-                yield transcript, delta, False
+            transcript, parsed_delta, changed = transcript_parser.push(delta)
+            if interim_results and changed:
+                yield transcript, parsed_delta, False
                 await asyncio.sleep(0)
 
-        yield transcript, "", True
+        yield transcript_parser.transcript, "", True
 
     def close(self) -> None:
         self.inferencer.close()
