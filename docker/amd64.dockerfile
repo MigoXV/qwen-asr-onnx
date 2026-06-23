@@ -1,5 +1,5 @@
 # 基于已经包含 Poetry 的基础镜像
-FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/python:3.10.18-poetry-0-4-1
+FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/python:3.10.18-poetry-0-4-1-amd64
 
 # 设置工作目录
 WORKDIR /app
