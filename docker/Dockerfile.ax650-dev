@@ -1,18 +1,25 @@
 FROM registry.cn-hangzhou.aliyuncs.com/migo-dl/axengine:0.1.3-m4c-aarch64
 
-USER root
+# The base image already provides:
+# - Python 3.10 and the /app/.venv virtual environment;
+# - Poetry 2.2.1 on PATH;
+# - GCC/G++, GNU Make, Git, curl and unzip;
+# - axengine==0.1.3, cffi==2.1.1 and numpy==2.2.6 in /app/.venv.
+#
+# Keep using that environment.  This image only adds what is absent from the
+# base image: CMake for the native build, the AX650 SDK headers/link libraries,
+# and this repository's locked Python dependencies.
 ENV DEBIAN_FRONTEND=noninteractive \
     POETRY_VIRTUALENVS_CREATE=false \
     BSP_MSP_DIR=/opt/ax-sdk/msp_3.6.2/out
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build git curl unzip sox libsndfile1 \
+RUN apt-get update && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --no-cache-dir \
-    poetry==2.4.1 cffi==2.1.1 pytest==8.4.2
-
-WORKDIR /opt/qwen-asr-onnx
+# Install the lockfile once into the base image's already-active venv.  The
+# repository itself is bind-mounted at /workspace during development, so it is
+# deliberately not copied into this image.
+WORKDIR /tmp/qwen-asr-onnx-deps
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --with dev --no-root --no-interaction
 
