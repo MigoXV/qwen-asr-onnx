@@ -6,8 +6,12 @@ ENV BSP_MSP_DIR=/opt/ax-sdk/msp_3.6.2/out \
 RUN apt-get update && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /opt/ax-sdk \
-    && curl -fL --retry 5 \
+RUN mkdir -p /opt/ax-sdk && \
+    export http_proxy=http://localhost:7890 && \
+    export https_proxy=http://localhost:7890 && \
+    export HTTP_PROXY=http://localhost:7890 && \
+    export HTTPS_PROXY=http://localhost:7890 && \
+    curl -fL --retry 5 \
     -o /tmp/msp_3.6.2.zip \
     https://github.com/ZHEQIUSHUI/assets/releases/download/ax_3.6.2/msp_3.6.2.zip \
     && unzip -q /tmp/msp_3.6.2.zip -d /opt/ax-sdk \
