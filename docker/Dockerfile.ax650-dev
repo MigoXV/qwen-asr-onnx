@@ -6,7 +6,8 @@ ENV BSP_MSP_DIR=/opt/ax-sdk/msp_3.6.2/out \
 RUN apt-get update && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /opt/ax-sdk && \
+RUN sed -i 's/^#force_color_prompt=yes/force_color_prompt=yes/' /root/.bashrc && \
+    mkdir -p /opt/ax-sdk && \
     export http_proxy=http://localhost:7890 && \
     export https_proxy=http://localhost:7890 && \
     export HTTP_PROXY=http://localhost:7890 && \
