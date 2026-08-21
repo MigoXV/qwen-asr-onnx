@@ -15,6 +15,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.so.*
 
 # Distribution / packaging
 .Python
@@ -26,6 +27,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+!src/qwen_asr_onnx/ax_m4c/lib/
+!src/qwen_asr_onnx/ax_m4c/lib/.gitkeep
 parts/
 sdist/
 var/
