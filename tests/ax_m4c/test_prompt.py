@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def test_prompt_tokens_match_onnx_layout(core_native) -> None:
+def test_prompt_tokens_match_fixed_asr_layout(core_native) -> None:
     ffi, lib = core_native
     required = ffi.new("size_t *")
     assert lib.ax_qwen_asr_test_prompt(65, ffi.NULL, 0, required) == 2

@@ -19,6 +19,8 @@ import typer
 from omegaconf import OmegaConf
 
 from qwen_asr_onnx.configs import AppConfig
+from qwen_asr_onnx.inferencers.ax_engine import AxInferenceEngine
+from qwen_asr_onnx.inferencers.grpc_inferencer import GrpcInferencer
 from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import (
     add_UxSpeechServicer_to_server,
 )
@@ -39,27 +41,50 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def main() -> None:
+    """Qwen3-ASR AX650 服务命令组。"""
+
+
 async def run_server(config: AppConfig) -> None:
-    # 初始化 gRPC 服务，servicer 内部负责加载推理器。
-    server = grpc.aio.server()
-    servicer = ASRServicer(config)
+    server = grpc.aio.server(
+        options=[
+            ("grpc.max_receive_message_length", 1024 * 1024),
+            ("grpc.max_send_message_length", 1024 * 1024),
+        ]
+    )
+    engine = AxInferenceEngine(
+        config.model_path,
+        warmup=config.ax.warmup,
+        max_inflight_requests=config.ax.max_inflight_requests,
+    )
+    servicer = ASRServicer(config, GrpcInferencer(engine))
     add_UxSpeechServicer_to_server(servicer, server)
-    server.add_insecure_port(f"[::]:{config.server_port}")
-    await server.start()
-    logger.info("gRPC server listening on port %d", config.server_port)
+    address = f"[::]:{config.server_port}"
+    if server.add_insecure_port(address) == 0:
+        raise RuntimeError(f"Failed to bind gRPC address: {address}")
 
     try:
+        logger.info(
+            "Loading AX650 model: model=%s, warmup=%s, max_inflight_requests=%d",
+            config.model,
+            config.ax.warmup,
+            config.ax.max_inflight_requests,
+        )
+        await engine.start()
+        logger.info("AX650 model loaded successfully.")
+        await server.start()
+        logger.info("gRPC server listening on port %d", config.server_port)
         await server.wait_for_termination()
     finally:
-        # 退出时给 gRPC 一个短暂宽限期，并释放 servicer 持有的模型资源。
-        await server.stop(grace=5)
-        servicer.close()
+        await server.stop(grace=config.ax.shutdown_grace_seconds)
+        await engine.close(grace_seconds=config.ax.shutdown_grace_seconds)
 
 
 @app.command()
 def serve(
     config: Path = typer.Option(
-        "examples/qwen-asr-onnx/config.yaml",
+        "examples/ax-m4c/grpc.yaml",
         "--config",
         help="Qwen3-ASR YAML 配置文件路径。",
         exists=True,
@@ -77,13 +102,13 @@ def serve(
     merged = OmegaConf.merge(schema, loaded)
     app_config = OmegaConf.to_object(merged)
     logger.info(
-        "Config loaded: model=%s, server_port=%d, max_new_tokens=%d, "
-        "onnx.num_threads=%d, onnx.quantize=%s",
+        "Config loaded: model=%s, server_port=%d, ax.warmup=%s, "
+        "ax.max_inflight_requests=%d, ax.shutdown_grace_seconds=%.1f",
         app_config.model,
         app_config.server_port,
-        app_config.generation.max_new_tokens,
-        app_config.onnx.num_threads,
-        app_config.onnx.quantize,
+        app_config.ax.warmup,
+        app_config.ax.max_inflight_requests,
+        app_config.ax.shutdown_grace_seconds,
     )
 
     asyncio.run(run_server(app_config))

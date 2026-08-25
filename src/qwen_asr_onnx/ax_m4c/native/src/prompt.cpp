@@ -7,7 +7,7 @@
 namespace ax_qwen_asr {
 
 std::vector<std::uint32_t> BuildPromptIds(std::size_t audio_token_count) {
-    // 与 inferencers/onnx.py 的空 context、未指定 language 布局逐 token 一致。
+    // 固定使用空 context、未指定 language 的 Qwen3-ASR prompt 布局。
     std::vector<std::uint32_t> ids = {
         kImStartId, kSystemId, kNewlineId, kImEndId, kNewlineId,
         kImStartId, kUserId, kNewlineId, kAudioStartId,

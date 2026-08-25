@@ -8,6 +8,7 @@ import wave
 from pathlib import Path
 
 from qwen_asr_onnx.ax_m4c import AxQwenAsr
+from qwen_asr_onnx.inferencers.text.asr_output import parse_asr_output
 
 
 def read_pcm16_wav(path: Path) -> bytes:
@@ -31,7 +32,9 @@ def main() -> None:
 
     pcm = read_pcm16_wav(args.wav)
     with AxQwenAsr(args.model_dir) as asr:
-        print(asr.transcribe_pcm16(pcm, sample_rate=16000))
+        raw_output = asr.transcribe_pcm16(pcm, sample_rate=16000)
+        _, transcript = parse_asr_output(raw_output)
+        print(transcript)
 
 
 if __name__ == "__main__":

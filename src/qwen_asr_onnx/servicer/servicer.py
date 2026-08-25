@@ -6,22 +6,32 @@ from collections.abc import AsyncIterator
 
 import grpc
 
-from google.protobuf.duration_pb2 import Duration
-from qwen_asr_onnx.commands.utils import build_onnx_kwargs
+from qwen_asr_onnx.ax_m4c.errors import (
+    AxQwenAsrError,
+    AxQwenAsrInvalidArgumentError,
+)
 from qwen_asr_onnx.configs import AppConfig
+from qwen_asr_onnx.inferencers.ax_engine import (
+    AxEngineClosedError,
+    AxQueueFullError,
+)
 from qwen_asr_onnx.inferencers.grpc_inferencer import GrpcInferencer
-from qwen_asr_onnx.inferencers.onnx import OnnxAsrPipeline
 from qwen_asr_onnx.protos.asr.ux_speech_pb2 import (
+    LanguageInfo,
+    RecognitionConfig,
     SpeechRecognitionAlternative,
     StreamingRecognizeResponse,
     StreamingRecognizeRequest,
     StreamingRecognitionConfig,
     StreamingRecognitionResult,
-    WordInfo,
 )
 from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import UxSpeechServicer
 
 logger = logging.getLogger(__name__)
+
+SAMPLE_RATE = 16000
+MAX_PCM_SAMPLES = 479_999
+MAX_AUDIO_BYTES = MAX_PCM_SAMPLES * 2
 
 
 class ASRServicer(UxSpeechServicer):
@@ -32,33 +42,13 @@ class ASRServicer(UxSpeechServicer):
     并将其视为完整音频。返回一次最终结果后结束 RPC。
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, inferencer: GrpcInferencer) -> None:
         super().__init__()
-        self.default_context = str(getattr(config, "context", "") or "")
-        self.inferencer = self._load_inferencer(config)
-
-    def close(self) -> None:
-        logger.info("Closing ASR servicer resources.")
-        self.inferencer.close()
-
-    @staticmethod
-    def _load_inferencer(config: AppConfig) -> GrpcInferencer:
-        """按应用配置加载 ONNX 推理器。"""
-        logger.info(
-            "Loading model: model=%s, max_new_tokens=%d, onnx.num_threads=%d, "
-            "onnx.quantize=%s",
-            config.model,
-            config.generation.max_new_tokens,
-            config.onnx.num_threads,
-            config.onnx.quantize,
-        )
-        try:
-            inferencer = OnnxAsrPipeline(**build_onnx_kwargs(config))
-        except Exception as exc:
-            logger.error("Failed to load model: %s", exc, exc_info=True)
-            raise
-        logger.info("Model loaded successfully.")
-        return GrpcInferencer(inferencer=inferencer)
+        self.inferencer = inferencer
+        if config.context:
+            logger.warning(
+                "AX650 fixed prompt does not support context; configured context is ignored."
+            )
 
     async def StreamingRecognize(
         self,
@@ -80,10 +70,15 @@ class ASRServicer(UxSpeechServicer):
         )
         if audio_bytes is None:
             return
-        request_context = self._resolve_context(
-            default_context=self.default_context,
-            hotwords=streaming_config.config.hotwords,
-        )
+        if streaming_config.interim_results:
+            logger.warning(
+                "AX650 returns final results only; interim_results is ignored."
+            )
+        if streaming_config.config.hotwords:
+            logger.warning(
+                "AX650 fixed prompt does not support hotwords; %d hotword(s) are ignored.",
+                len(streaming_config.config.hotwords),
+            )
         sample_rate = streaming_config.config.sample_rate_hertz
         audio_duration_seconds = self._calculate_audio_duration_seconds(
             audio_bytes=audio_bytes,
@@ -91,35 +86,52 @@ class ASRServicer(UxSpeechServicer):
         )
         logger.info(
             "Starting inference: audio_bytes=%d, sample_rate=%d, language_code=%s, "
-            "audio_duration_seconds=%.3f, interim_results=%s, has_context=%s",
+            "audio_duration_seconds=%.3f, interim_results=%s",
             len(audio_bytes),
             sample_rate,
             streaming_config.config.language_code,
             audio_duration_seconds,
             streaming_config.interim_results,
-            bool(request_context),
         )
-        final_transcript = ""
         try:
-            async for transcript, delta, is_final in self.inferencer.infer(
+            result = await self.inferencer.infer(
                 audio_bytes=audio_bytes,
                 sample_rate=sample_rate,
                 language_code=streaming_config.config.language_code,
-                interim_results=streaming_config.interim_results,
-                context=request_context,
-            ):
-                final_transcript = transcript
-                # 客户端断开后停止继续推送识别结果。
-                if not self._context_is_active(context):
-                    logger.info("Client disconnected; stopping response stream.")
-                    break
-                yield self._make_response(
-                    transcript,
-                    is_final=is_final,
-                    word=delta,
-                )
+            )
+            if self._context_is_active(context):
+                yield self._make_response(result.transcript, result.language)
+            metrics = result.inference.metrics
+            logger.info(
+                "Inference metrics: preprocess_ms=%.3f, encoder_ms=%.3f, "
+                "decoder_ttft_ms=%.3f, decoder_ms=%.3f, native_total_ms=%.3f",
+                metrics.preprocess_ms,
+                metrics.encoder_ms,
+                metrics.decoder_ttft_ms,
+                metrics.decoder_ms,
+                metrics.native_total_ms,
+            )
         except asyncio.CancelledError:
-            logger.error("StreamingRecognize cancelled by client.", exc_info=True)
+            logger.info("StreamingRecognize cancelled by client.")
+            return
+        except AxQueueFullError as exc:
+            logger.warning("Inference rejected: %s", exc)
+            await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, str(exc))
+            return
+        except AxQwenAsrInvalidArgumentError as exc:
+            logger.warning("Invalid inference input: %s", exc)
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+            return
+        except AxEngineClosedError as exc:
+            logger.error("AX inference engine unavailable: %s", exc)
+            await context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
+            return
+        except AxQwenAsrError as exc:
+            logger.error("AX inference failed: %s", exc, exc_info=True)
+            await context.abort(
+                grpc.StatusCode.INTERNAL,
+                f"AX inference failed: {exc}",
+            )
             return
         except Exception as exc:
             logger.error("Inference failed: %s", exc, exc_info=True)
@@ -131,7 +143,7 @@ class ASRServicer(UxSpeechServicer):
         logger.info(
             "Inference finished: audio_duration_seconds=%.3f, transcript_chars=%d",
             audio_duration_seconds,
-            len(final_transcript),
+            len(result.transcript),
         )
 
     @staticmethod
@@ -163,7 +175,24 @@ class ASRServicer(UxSpeechServicer):
                 "First message must contain streaming_config.",
             )
             return None
-        return config_request.streaming_config
+        streaming_config = config_request.streaming_config
+        recognition_config = streaming_config.config
+        if recognition_config.encoding not in (
+            RecognitionConfig.AUDIO_ENCODING_UNSPECIFIED,
+            RecognitionConfig.LINEAR16,
+        ):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "Only LINEAR16 audio encoding is supported.",
+            )
+            return None
+        if recognition_config.sample_rate_hertz != SAMPLE_RATE:
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"sample_rate_hertz must be {SAMPLE_RATE}.",
+            )
+            return None
+        return streaming_config
 
     @staticmethod
     async def _load_audio_content(
@@ -191,7 +220,26 @@ class ASRServicer(UxSpeechServicer):
                 "Only a single audio_content message is supported.",
             )
             return None
-        return audio_request.audio_content
+        audio_content = audio_request.audio_content
+        if not audio_content:
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "audio_content must not be empty.",
+            )
+            return None
+        if len(audio_content) % 2:
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "LINEAR16 audio_content must contain an even number of bytes.",
+            )
+            return None
+        if len(audio_content) > MAX_AUDIO_BYTES:
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"audio_content exceeds the AX650 limit of {MAX_AUDIO_BYTES} bytes.",
+            )
+            return None
+        return audio_content
 
     @staticmethod
     async def _anext_or_none(
@@ -221,34 +269,21 @@ class ASRServicer(UxSpeechServicer):
         return True
 
     @staticmethod
-    def _resolve_context(default_context: str, hotwords) -> str:
-        """按会话热词优先、系统上下文兜底的规则生成模型 context。"""
-        hotword_context = " ".join(
-            word for word in (str(item).strip() for item in hotwords) if word
-        )
-        if hotword_context:
-            return hotword_context
-        return default_context or ""
-
-    @staticmethod
     def _make_response(
-        transcript: str, is_final: bool, word: str = ""
+        transcript: str,
+        language: str,
     ) -> StreamingRecognizeResponse:
-        """构造只包含一个识别结果的 ``StreamingRecognizeResponse``。"""
+        """构造不含模型协议前缀的最终响应。"""
         return StreamingRecognizeResponse(
             results=[
                 StreamingRecognitionResult(
                     alternative=SpeechRecognitionAlternative(
                         transcript=transcript,
-                        words=[
-                            WordInfo(
-                                word=word,
-                                start_time=Duration(seconds=0, nanos=0),
-                                end_time=Duration(seconds=0, nanos=0),
-                            )
-                        ],
+                        words=[],
+                        language=LanguageInfo(code=language),
+                        turn_completed=True,
                     ),
-                    is_final=is_final,
+                    is_final=True,
                 )
             ]
         )

@@ -85,11 +85,11 @@ export LD_LIBRARY_PATH=/soc/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 
 ## 音频、prompt 与解码
 
-native 预处理与 `inferencers/onnx.py` 对齐：16 kHz、400 点 FFT、hop 160、periodic Hann、`center=True`、reflect padding、128 个 Slaney mel bin、power spectrum、`log10`、8.0 动态范围裁剪和 `(x + 4) / 4` 归一化。
+native 预处理遵循 Qwen3-ASR 参考算法：16 kHz、400 点 FFT、hop 160、periodic Hann、`center=True`、reflect padding、128 个 Slaney mel bin、power spectrum、`log10`、8.0 动态范围裁剪和 `(x + 4) / 4` 归一化。
 
 固定 400 点 DFT 使用预计算 Bluestein chirp 加 1024 点 radix-2 FFT。`rita.wav` 的 513 帧结果相对现有 librosa 实现最大绝对误差实测约 `1.57e-5`，单元测试容差为 `rtol=2e-4, atol=2e-5`。
 
-三次下采样后的 audio token 会替换 prompt 中的 `AUDIO_PAD` embedding。prompt 的 system/user/assistant 和 Qwen3-ASR special token 与现有 ONNX 实现逐 token 对齐。decoder 使用：
+三次下采样后的 audio token 会替换 prompt 中的 `AUDIO_PAD` embedding。prompt 使用固定的 system/user/assistant 和 Qwen3-ASR special token 布局。decoder 使用：
 
 - batch size 1；
 - 每块 64 token 的 prefill group；
