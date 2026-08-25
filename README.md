@@ -127,3 +127,25 @@ git diff --check
 ```
 
 AX native runner 的构建、固定模型约束和板端基准说明见 [`src/qwen_asr_onnx/ax_m4c/README.md`](src/qwen_asr_onnx/ax_m4c/README.md)。
+
+## AX650 部署镜像
+
+使用官方 AX650 模型时，构建独立的 ARM64 部署镜像：
+
+```bash
+docker build \
+  -f docker/Dockerfile.ax \
+  -t registry.cn-hangzhou.aliyuncs.com/migo-dl/qwen-asr-ax:0.1.0a1-aarch64 \
+  .
+```
+
+模型不写入镜像，启动时将官方模型目录只读挂载到 `/models`：
+
+```bash
+docker run --rm --network host --privileged \
+  -e MODEL_PATH=/models \
+  -v /data/repositories/model-bin/AXERA-TECH/Qwen3-ASR-0.6B-AX650-C64-P448-CTX2047:/models:ro \
+  registry.cn-hangzhou.aliyuncs.com/migo-dl/qwen-asr-ax:0.1.0a1-aarch64
+```
+
+容器默认执行 `qwen-asr serve`，监听 `50051`，并在模型加载与预热完成后通过标准 gRPC Health 接口报告 `SERVING`。
