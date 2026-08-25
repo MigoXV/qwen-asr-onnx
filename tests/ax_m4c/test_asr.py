@@ -37,6 +37,46 @@ def test_accepts_pcm16_bytes(fake_bindings, tmp_path) -> None:
         assert asr.transcribe_pcm16(b"\0\0" * 80) == RAW_TEXT
 
 
+def test_streaming_callback_preserves_final_text(fake_bindings, tmp_path) -> None:
+    events: list[tuple[int, int, str]] = []
+
+    with AxQwenAsr(tmp_path, _bindings=fake_bindings) as asr:
+        result = asr.transcribe_pcm16_stream(
+            b"\0\0" * 80,
+            token_callback=lambda token_id, index, delta: events.append(
+                (token_id, index, delta)
+            ),
+        )
+
+    assert result == RAW_TEXT
+    assert [event[1] for event in events] == list(range(len(events)))
+    assert "".join(event[2] for event in events) == RAW_TEXT
+
+
+def test_streaming_callback_can_stop_at_token_boundary(
+    fake_bindings, tmp_path
+) -> None:
+    with AxQwenAsr(tmp_path, _bindings=fake_bindings) as asr:
+        result = asr.transcribe_pcm16_stream(
+            b"\0\0" * 80,
+            token_callback=lambda _token_id, index, _delta: index < 2,
+        )
+
+    assert result == "language Chinese<asr_text>"
+
+
+def test_streaming_callback_exception_is_propagated(fake_bindings, tmp_path) -> None:
+    def fail(_token_id: int, _index: int, _delta: str) -> bool:
+        raise RuntimeError("callback failed")
+
+    with AxQwenAsr(tmp_path, _bindings=fake_bindings) as asr:
+        with pytest.raises(RuntimeError, match="callback failed"):
+            asr.transcribe_pcm16_stream(
+                b"\0\0" * 80,
+                token_callback=fail,
+            )
+
+
 @pytest.mark.parametrize("rate", [8000, 44100])
 def test_rejects_non_16k_rate(fake_bindings, tmp_path, rate: int) -> None:
     with AxQwenAsr(tmp_path, _bindings=fake_bindings) as asr:

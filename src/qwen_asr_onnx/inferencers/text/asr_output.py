@@ -9,6 +9,28 @@ _ASR_TEXT_TAG = "<asr_text>"
 _LANG_PREFIX = "language "
 
 
+class AsrOutputStreamParser:
+    """累计解析 token delta，并只暴露 `<asr_text>` 后的干净文本。"""
+
+    def __init__(self, user_language: Optional[str] = None) -> None:
+        self._raw = ""
+        self._user_language = user_language
+        self._last_transcript = ""
+
+    def feed(self, delta: str) -> Tuple[str, str] | None:
+        self._raw += delta
+        if _ASR_TEXT_TAG not in self._raw:
+            return None
+        language, transcript = parse_asr_output(
+            self._raw,
+            user_language=self._user_language,
+        )
+        if not transcript or transcript == self._last_transcript:
+            return None
+        self._last_transcript = transcript
+        return language, transcript
+
+
 def detect_and_fix_repetitions(text: str, threshold: int = 20) -> str:
     def fix_char_repeats(value: str, thresh: int) -> str:
         result: list[str] = []

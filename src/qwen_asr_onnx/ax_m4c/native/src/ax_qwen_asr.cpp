@@ -67,6 +67,75 @@ void ClearHandleError(ax_qwen_asr_handle* handle) {
     g_error_snapshot.clear();
 }
 
+int TranscribePcm16(
+    ax_qwen_asr_handle* handle,
+    const int16_t* samples,
+    size_t sample_count,
+    int sample_rate,
+    ax_qwen_asr_token_callback callback,
+    void* user_data,
+    char* output,
+    size_t output_capacity,
+    size_t* required_size) {
+    if (!handle) {
+        SetNullHandleError("transcribe handle 不能为空");
+        return AX_QWEN_ASR_INVALID_ARGUMENT;
+    }
+    std::lock_guard<std::mutex> lock(handle->mutex);
+    ClearHandleError(handle);
+    if (!required_size) {
+        SetHandleError(handle, "required_size 不能为空");
+        return AX_QWEN_ASR_INVALID_ARGUMENT;
+    }
+    *required_size = 0;
+    if (!samples || sample_count == 0) {
+        SetHandleError(handle, "samples 不能为空且 sample_count 必须大于 0");
+        return AX_QWEN_ASR_INVALID_ARGUMENT;
+    }
+    if (sample_rate != 16000) {
+        SetHandleError(handle, "固定 profile 只接受 16000 Hz PCM16");
+        return AX_QWEN_ASR_INVALID_ARGUMENT;
+    }
+    if (!output && output_capacity != 0) {
+        SetHandleError(handle, "output 为空时 output_capacity 必须为 0");
+        return AX_QWEN_ASR_INVALID_ARGUMENT;
+    }
+
+    try {
+        ax_qwen_asr::QwenAsrRunner::TokenCallback runner_callback;
+        if (callback) {
+            runner_callback = [callback, user_data](
+                                  std::uint32_t token_id,
+                                  std::size_t token_index,
+                                  const std::string& delta) {
+                return callback(
+                           token_id,
+                           token_index,
+                           delta.data(),
+                           delta.size(),
+                           user_data) == 0;
+            };
+        }
+        const std::string text = handle->runner->Transcribe(
+            samples, sample_count, sample_rate, runner_callback);
+        *required_size = text.size() + 1;
+        if (!output || output_capacity < *required_size) {
+            SetHandleError(
+                handle,
+                "输出 buffer 不足：需要 " + std::to_string(*required_size) +
+                    " 字节，实际 " + std::to_string(output_capacity));
+            return AX_QWEN_ASR_BUFFER_TOO_SMALL;
+        }
+        std::memcpy(output, text.data(), text.size());
+        output[text.size()] = '\0';
+        return AX_QWEN_ASR_OK;
+    } catch (...) {
+        const int code = ExceptionCode();
+        SetHandleError(handle, ExceptionMessage());
+        return code;
+    }
+}
+
 }  // namespace
 
 extern "C" int ax_qwen_asr_create(
@@ -130,48 +199,38 @@ extern "C" int ax_qwen_asr_transcribe_pcm16(
     char* output,
     size_t output_capacity,
     size_t* required_size) {
-    if (!handle) {
-        SetNullHandleError("transcribe handle 不能为空");
-        return AX_QWEN_ASR_INVALID_ARGUMENT;
-    }
-    std::lock_guard<std::mutex> lock(handle->mutex);
-    ClearHandleError(handle);
-    if (!required_size) {
-        SetHandleError(handle, "required_size 不能为空");
-        return AX_QWEN_ASR_INVALID_ARGUMENT;
-    }
-    *required_size = 0;
-    if (!samples || sample_count == 0) {
-        SetHandleError(handle, "samples 不能为空且 sample_count 必须大于 0");
-        return AX_QWEN_ASR_INVALID_ARGUMENT;
-    }
-    if (sample_rate != 16000) {
-        SetHandleError(handle, "固定 profile 只接受 16000 Hz PCM16");
-        return AX_QWEN_ASR_INVALID_ARGUMENT;
-    }
-    if (!output && output_capacity != 0) {
-        SetHandleError(handle, "output 为空时 output_capacity 必须为 0");
-        return AX_QWEN_ASR_INVALID_ARGUMENT;
-    }
+    return TranscribePcm16(
+        handle,
+        samples,
+        sample_count,
+        sample_rate,
+        nullptr,
+        nullptr,
+        output,
+        output_capacity,
+        required_size);
+}
 
-    try {
-        const std::string text = handle->runner->Transcribe(samples, sample_count, sample_rate);
-        *required_size = text.size() + 1;
-        if (!output || output_capacity < *required_size) {
-            SetHandleError(
-                handle,
-                "输出 buffer 不足：需要 " + std::to_string(*required_size) +
-                    " 字节，实际 " + std::to_string(output_capacity));
-            return AX_QWEN_ASR_BUFFER_TOO_SMALL;
-        }
-        std::memcpy(output, text.data(), text.size());
-        output[text.size()] = '\0';
-        return AX_QWEN_ASR_OK;
-    } catch (...) {
-        const int code = ExceptionCode();
-        SetHandleError(handle, ExceptionMessage());
-        return code;
-    }
+extern "C" int ax_qwen_asr_transcribe_pcm16_stream(
+    ax_qwen_asr_handle* handle,
+    const int16_t* samples,
+    size_t sample_count,
+    int sample_rate,
+    ax_qwen_asr_token_callback callback,
+    void* user_data,
+    char* output,
+    size_t output_capacity,
+    size_t* required_size) {
+    return TranscribePcm16(
+        handle,
+        samples,
+        sample_count,
+        sample_rate,
+        callback,
+        user_data,
+        output,
+        output_capacity,
+        required_size);
 }
 
 extern "C" int ax_qwen_asr_get_last_metrics(

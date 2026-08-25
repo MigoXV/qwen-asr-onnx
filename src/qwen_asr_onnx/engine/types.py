@@ -60,6 +60,15 @@ class InferenceResult:
 
 
 @dataclass(frozen=True)
+class InferenceTokenEvent:
+    request_id: str
+    sequence: int
+    token_id: int
+    text_delta: str
+    emitted_monotonic: float
+
+
+@dataclass(frozen=True)
 class WorkerOutcome:
     request: InferenceRequest
     output: RunnerOutput | None

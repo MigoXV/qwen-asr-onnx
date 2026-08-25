@@ -4,7 +4,12 @@ from pathlib import Path
 from typing import Callable
 
 from qwen_asr_onnx.ax_m4c import AxQwenAsr
-from qwen_asr_onnx.runners.base import RunnerMetrics, RunnerOutput
+from qwen_asr_onnx.runners.base import (
+    RunnerMetrics,
+    RunnerOutput,
+    RunnerToken,
+    RunnerTokenCallback,
+)
 
 
 class AxModelRunner:
@@ -29,6 +34,35 @@ class AxModelRunner:
     def infer_pcm16(self, pcm: bytes, *, sample_rate: int) -> RunnerOutput:
         model = self._require_model()
         raw_text = model.transcribe_pcm16(pcm, sample_rate=sample_rate)
+        return self._make_output(model, raw_text)
+
+    def infer_pcm16_stream(
+        self,
+        pcm: bytes,
+        *,
+        sample_rate: int,
+        token_callback: RunnerTokenCallback,
+    ) -> RunnerOutput:
+        model = self._require_model()
+
+        def on_token(token_id: int, sequence: int, text_delta: str) -> bool | None:
+            return token_callback(
+                RunnerToken(
+                    token_id=token_id,
+                    sequence=sequence,
+                    text_delta=text_delta,
+                )
+            )
+
+        raw_text = model.transcribe_pcm16_stream(
+            pcm,
+            sample_rate=sample_rate,
+            token_callback=on_token,
+        )
+        return self._make_output(model, raw_text)
+
+    @staticmethod
+    def _make_output(model: AxQwenAsr, raw_text: str) -> RunnerOutput:
         native = model.last_metrics()
         return RunnerOutput(
             raw_text=raw_text,

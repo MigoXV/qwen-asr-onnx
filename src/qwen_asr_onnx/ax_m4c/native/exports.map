@@ -3,6 +3,7 @@ AX_QWEN_ASR_1 {
         ax_qwen_asr_create;
         ax_qwen_asr_warmup;
         ax_qwen_asr_transcribe_pcm16;
+        ax_qwen_asr_transcribe_pcm16_stream;
         ax_qwen_asr_get_last_metrics;
         ax_qwen_asr_last_error;
         ax_qwen_asr_destroy;

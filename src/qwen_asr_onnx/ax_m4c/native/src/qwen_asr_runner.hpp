@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,11 @@ struct RunnerMetrics {
 
 class QwenAsrRunner {
 public:
+    using TokenCallback = std::function<bool(
+        std::uint32_t token_id,
+        std::size_t token_index,
+        const std::string& utf8_delta)>;
+
     explicit QwenAsrRunner(const std::string& model_dir);
     ~QwenAsrRunner();
 
@@ -38,7 +44,8 @@ public:
     std::string Transcribe(
         const std::int16_t* samples,
         std::size_t sample_count,
-        int sample_rate);
+        int sample_rate,
+        const TokenCallback& callback = {});
     const RunnerMetrics& LastMetrics() const noexcept;
 
 private:

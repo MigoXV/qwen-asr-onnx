@@ -21,7 +21,7 @@ gRPC async client stream
 
 - `ASRServicer` 保留现有 `ux_speech.UxSpeech` 通讯协议，处理请求校验和 gRPC 状态码。
 - `EngineCore` 是外层异步引擎，管理请求 ID、容量、deadline、取消和优雅退出。
-- `AxWorker` 在一个专用线程中串行执行模型加载、预热、推理和关闭，避免阻塞 asyncio 事件循环。
+- `AxWorker` 在一个专用线程中串行执行模型加载、预热、推理和关闭，并把 native token 事件安全投递回 asyncio 事件循环。
 - `AxRuntime` 管理后端状态，`AxModelRunner` 适配公开的 `AxQwenAsr`。
 - `AxQwenAsr` 及其 native 实现仍是原来的 AX 推理算法入口。
 
@@ -91,10 +91,13 @@ poetry run qwen-asr serve
 poetry run python examples/ax-m4c/grpc_client.py \
   data-bin/2026-08-24/audio/6259c2f6915b_011.wav \
   --target 127.0.0.1:50051 \
-  --timeout 120
+  --timeout 120 \
+  --interim-results
 ```
 
-服务只返回清理后的最终转写文本，不会把 `language Chinese<asr_text>` 等模型内部前缀暴露给客户端。现有协议字段中的 hotwords 和 interim 配置仍可发送，但当前 AX 算法不消费它们。
+`interim_results=true` 时，decoder 每生成一个有效文本 token，服务就返回一条累计 transcript，`is_final=false`；生成结束后再返回完整 transcript，`is_final=true`。设置 `--no-interim-results` 时保持单条 final 响应。任何响应都不会暴露 `language Chinese<asr_text>` 等模型内部前缀。hotwords 字段仍兼容接收，但当前固定 AX prompt 不消费它。
+
+需要观察响应到达时间时增加 `--show-timing`。时间和 final 标志写入 stderr，stdout 仍只包含干净 transcript。
 
 ## 健康检查
 
@@ -110,11 +113,11 @@ poetry run python examples/ax-m4c/grpc_client.py \
 
 ## 并发和取消语义
 
-AX runner 当前为单模型、单 worker 串行执行。asyncio 服务可以并发接收客户端事件，但实际 native 推理由专用工作线程串行调度：
+AX runner 当前为单模型、单 worker 串行执行。asyncio 服务可以并发接收客户端事件和持续发送 token 文本，但实际 native 推理由专用工作线程串行调度：
 
 - 超过 `QWEN_ASR_MAX_INFLIGHT_REQUESTS` 的请求立即返回 `RESOURCE_EXHAUSTED`；
 - 排队请求在客户端取消或 deadline 到期后不会进入 native 推理；
-- 已进入 native 调用的请求无法强制中断，结果会在取消或超时后丢弃；
+- 已进入 native 调用的请求会在下一个 token callback 边界观察取消或超时并停止生成；正在执行的单次 NPU decode 无法从中间打断；
 - 服务关闭时先停止接收新请求，再按宽限期排空，最后在 worker 线程关闭 runtime。
 
 ## 开发验证

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
+import time
 import wave
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,7 +34,12 @@ def read_pcm16_wav(path: Path) -> bytes:
         return wav_file.readframes(wav_file.getnframes())
 
 
-def requests(pcm: bytes, language: str) -> Iterator[StreamingRecognizeRequest]:
+def requests(
+    pcm: bytes,
+    language: str,
+    *,
+    interim_results: bool,
+) -> Iterator[StreamingRecognizeRequest]:
     yield StreamingRecognizeRequest(
         streaming_config=StreamingRecognitionConfig(
             config=RecognitionConfig(
@@ -39,7 +47,7 @@ def requests(pcm: bytes, language: str) -> Iterator[StreamingRecognizeRequest]:
                 sample_rate_hertz=16000,
                 language_code=language,
             ),
-            interim_results=False,
+            interim_results=interim_results,
         )
     )
     yield StreamingRecognizeRequest(audio_content=pcm)
@@ -51,17 +59,47 @@ def main() -> None:
     parser.add_argument("--target", default="127.0.0.1:50051")
     parser.add_argument("--language", default="", help="可选 ISO/BCP-47 语言代码")
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--interim-results",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="逐 token 返回累计文本；使用 --no-interim-results 只取 final",
+    )
+    parser.add_argument(
+        "--show-timing",
+        action="store_true",
+        help="把每条响应的到达时间和 final 状态以 JSON 输出到 stderr",
+    )
     args = parser.parse_args()
 
     pcm = read_pcm16_wav(args.wav)
+    started = time.monotonic()
     with grpc.insecure_channel(args.target) as channel:
         responses = UxSpeechStub(channel).StreamingRecognize(
-            requests(pcm, args.language),
+            requests(
+                pcm,
+                args.language,
+                interim_results=args.interim_results,
+            ),
             timeout=args.timeout,
         )
         for response in responses:
             for result in response.results:
-                print(result.alternative.transcript)
+                if args.show_timing:
+                    print(
+                        json.dumps(
+                            {
+                                "arrival_ms": round(
+                                    (time.monotonic() - started) * 1000.0,
+                                    3,
+                                ),
+                                "is_final": result.is_final,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        file=sys.stderr,
+                    )
+                print(result.alternative.transcript, flush=True)
 
 
 if __name__ == "__main__":

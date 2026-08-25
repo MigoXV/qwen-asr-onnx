@@ -10,9 +10,10 @@ from typing import Callable
 from qwen_asr_onnx.engine.types import (
     CancelReason,
     InferenceRequest,
+    InferenceTokenEvent,
     WorkerOutcome,
 )
-from qwen_asr_onnx.runners.base import RunnerOutput
+from qwen_asr_onnx.runners.base import RunnerOutput, RunnerToken
 from qwen_asr_onnx.runtime.ax import AxRuntime
 
 
@@ -20,6 +21,7 @@ from qwen_asr_onnx.runtime.ax import AxRuntime
 class _WorkItem:
     request: InferenceRequest
     callback: Callable[[WorkerOutcome], None]
+    token_callback: Callable[[InferenceTokenEvent], None] | None
 
 
 class AxWorker:
@@ -67,10 +69,17 @@ class AxWorker:
         self,
         request: InferenceRequest,
         callback: Callable[[WorkerOutcome], None],
+        token_callback: Callable[[InferenceTokenEvent], None] | None = None,
     ) -> None:
         if self._thread is None or self._stop_requested.is_set():
             raise RuntimeError("AX worker is not accepting requests")
-        self._queue.put_nowait(_WorkItem(request=request, callback=callback))
+        self._queue.put_nowait(
+            _WorkItem(
+                request=request,
+                callback=callback,
+                token_callback=token_callback,
+            )
+        )
 
     async def close(self) -> None:
         if self._thread is None:
@@ -134,7 +143,17 @@ class AxWorker:
         output = None
         error = None
         try:
-            output = runtime.execute(request.pcm, sample_rate=request.sample_rate)
+            if item.token_callback is None:
+                output = runtime.execute(
+                    request.pcm,
+                    sample_rate=request.sample_rate,
+                )
+            else:
+                output = runtime.execute_stream(
+                    request.pcm,
+                    sample_rate=request.sample_rate,
+                    token_callback=lambda token: self._handle_token(item, token),
+                )
         except BaseException as exc:
             error = exc
         finished = time.monotonic()
@@ -147,6 +166,29 @@ class AxWorker:
             request.cancellation.cancel(CancelReason.DEADLINE)
             reason = CancelReason.DEADLINE
         self._complete(item, output, error, reason, started, finished)
+
+    def _handle_token(self, item: _WorkItem, token: RunnerToken) -> bool:
+        request = item.request
+        now = time.monotonic()
+        if request.cancellation.reason is None and (
+            request.deadline_monotonic is not None
+            and now >= request.deadline_monotonic
+        ):
+            request.cancellation.cancel(CancelReason.DEADLINE)
+        if request.cancellation.reason is not None:
+            return False
+        assert item.token_callback is not None
+        self._notify(
+            item.token_callback,
+            InferenceTokenEvent(
+                request_id=request.request_id,
+                sequence=token.sequence,
+                token_id=token.token_id,
+                text_delta=token.text_delta,
+                emitted_monotonic=now,
+            ),
+        )
+        return request.cancellation.reason is None
 
     def _complete(
         self,

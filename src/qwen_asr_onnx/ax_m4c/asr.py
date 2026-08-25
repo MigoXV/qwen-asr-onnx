@@ -6,6 +6,7 @@ import threading
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from .errors import (
@@ -19,6 +20,7 @@ from .errors import (
 from .ffi import ABI_VERSION, NativeBindings, load_native_library
 
 _OUTPUT_CAPACITY = 64 * 1024
+TokenCallback = Callable[[int, int, str], bool | None]
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,35 @@ class AxQwenAsr:
                 self._raise_native_error(code, handle)
 
     def transcribe_pcm16(self, pcm: Any, *, sample_rate: int = 16000) -> str:
+        return self._transcribe_pcm16(
+            pcm,
+            sample_rate=sample_rate,
+            token_callback=None,
+        )
+
+    def transcribe_pcm16_stream(
+        self,
+        pcm: Any,
+        *,
+        sample_rate: int = 16000,
+        token_callback: TokenCallback,
+    ) -> str:
+        """逐 token 回调 UTF-8 delta，并返回完整或被回调提前停止的文本。"""
+        if not callable(token_callback):
+            raise AxQwenAsrInvalidArgumentError("token_callback 必须可调用")
+        return self._transcribe_pcm16(
+            pcm,
+            sample_rate=sample_rate,
+            token_callback=token_callback,
+        )
+
+    def _transcribe_pcm16(
+        self,
+        pcm: Any,
+        *,
+        sample_rate: int,
+        token_callback: TokenCallback | None,
+    ) -> str:
         if isinstance(sample_rate, bool) or not isinstance(sample_rate, int):
             raise AxQwenAsrInvalidArgumentError("sample_rate 必须是整数 16000")
         if sample_rate != 16000:
@@ -128,8 +159,52 @@ class AxQwenAsr:
             samples = self._ffi.from_buffer("int16_t[]", byte_view)
             output = self._ffi.new("char[]", _OUTPUT_CAPACITY)
             required_size = self._ffi.new("size_t *")
-            code = int(
-                self._lib.ax_qwen_asr_transcribe_pcm16(
+            callback_errors: list[BaseException] = []
+            native_callback = self._ffi.NULL
+            if token_callback is not None:
+
+                @self._ffi.callback(
+                    "int(uint32_t, size_t, const char *, size_t, void *)",
+                    error=1,
+                )
+                def on_native_token(
+                    token_id: int,
+                    token_index: int,
+                    utf8_delta: Any,
+                    utf8_delta_size: int,
+                    user_data: Any,
+                ) -> int:
+                    del user_data
+                    try:
+                        delta = bytes(
+                            self._ffi.buffer(utf8_delta, utf8_delta_size)
+                        ).decode("utf-8", errors="strict")
+                        should_continue = token_callback(
+                            int(token_id),
+                            int(token_index),
+                            delta,
+                        )
+                        return 1 if should_continue is False else 0
+                    except BaseException as exc:
+                        callback_errors.append(exc)
+                        return 1
+
+                native_callback = on_native_token
+                native_call = self._lib.ax_qwen_asr_transcribe_pcm16_stream
+                native_args = (
+                    handle,
+                    samples,
+                    view.nbytes // 2,
+                    sample_rate,
+                    native_callback,
+                    self._ffi.NULL,
+                    output,
+                    _OUTPUT_CAPACITY,
+                    required_size,
+                )
+            else:
+                native_call = self._lib.ax_qwen_asr_transcribe_pcm16
+                native_args = (
                     handle,
                     samples,
                     view.nbytes // 2,
@@ -138,7 +213,9 @@ class AxQwenAsr:
                     _OUTPUT_CAPACITY,
                     required_size,
                 )
-            )
+            code = int(native_call(*native_args))
+            if callback_errors:
+                raise callback_errors[0]
             if code != NativeErrorCode.OK:
                 self._raise_native_error(
                     code,

@@ -31,6 +31,17 @@ with AxQwenAsr(model_dir) as asr:
     print(text)
 ```
 
+逐 token 获取 UTF-8 delta 时使用兼容的 streaming 方法；callback 返回 `False` 会在当前 token 边界提前停止：
+
+```python
+with AxQwenAsr(model_dir) as asr:
+    text = asr.transcribe_pcm16_stream(
+        pcm16_bytes,
+        sample_rate=16000,
+        token_callback=lambda token_id, sequence, delta: print(delta, end=""),
+    )
+```
+
 输入必须是一维、连续、16 kHz、单声道 PCM16；其他采样率会明确报错，不会静默重采样。返回值是模型原始 UTF-8 文本，不删除 `language Chinese<asr_text>`，也不做 `.strip()` 或替换。
 
 `AxQwenAsr` 持有唯一 native handle，支持 context manager，`close()` 幂等，并禁止 copy、deepcopy 和 pickle。当前进程只允许一个 live handle；同一 handle 的推理和关闭由 Python 与 C++ 两层串行化。
@@ -102,7 +113,7 @@ native 预处理遵循 Qwen3-ASR 参考算法：16 kHz、400 点 FFT、hop 160�
 
 ## C ABI
 
-公开头文件是 `native/include/ax_qwen_asr.h`，ABI version 为 1。除 create/warmup/transcribe/last_error/destroy 外，还提供只读的 `ax_qwen_asr_get_last_metrics()`。
+公开头文件是 `native/include/ax_qwen_asr.h`，ABI version 为 1。除 create/warmup/transcribe/last_error/destroy 外，还提供只读的 `ax_qwen_asr_get_last_metrics()` 和兼容新增的 `ax_qwen_asr_transcribe_pcm16_stream()` token callback 入口。
 
 所有 C++ 异常都在 ABI 边界转换成错误码。输出由调用者分配；容量不足时返回 `AX_QWEN_ASR_BUFFER_TOO_SMALL`，并把包含结尾 NUL 的尺寸写入 `required_size`。C++ 不分配需要 Python 释放的内存。
 

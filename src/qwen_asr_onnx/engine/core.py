@@ -21,6 +21,7 @@ from qwen_asr_onnx.engine.types import (
     EngineState,
     InferenceRequest,
     InferenceResult,
+    InferenceTokenEvent,
     WorkerOutcome,
 )
 from qwen_asr_onnx.engine.worker import AxWorker
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 class _Pending:
     request: InferenceRequest
     future: asyncio.Future[InferenceResult]
+    token_callback: Callable[[InferenceTokenEvent], None] | None
 
 
 class EngineCore:
@@ -82,6 +84,7 @@ class EngineCore:
         *,
         sample_rate: int,
         deadline_monotonic: float | None,
+        token_callback: Callable[[InferenceTokenEvent], None] | None = None,
     ) -> InferenceResult:
         now = time.monotonic()
         if self._state is not EngineState.READY:
@@ -109,12 +112,20 @@ class EngineCore:
             cancellation=CancellationToken(),
         )
         future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = _Pending(request=request, future=future)
+        self._pending[request_id] = _Pending(
+            request=request,
+            future=future,
+            token_callback=token_callback,
+        )
         self._idle.clear()
         self._accepted += 1
         self._high_water = max(self._high_water, len(self._pending))
         try:
-            self._worker.submit(request, self._handle_outcome)
+            self._worker.submit(
+                request,
+                self._handle_outcome,
+                self._handle_token if token_callback is not None else None,
+            )
         except (queue.Full, RuntimeError) as exc:
             self._pending.pop(request_id, None)
             self._rejected += 1
@@ -140,6 +151,23 @@ class EngineCore:
             future.cancel()
             self._emit_snapshot("engine_cancelled", request_id=request_id)
             raise
+
+    def _handle_token(self, event: InferenceTokenEvent) -> None:
+        pending = self._pending.get(event.request_id)
+        if pending is None or pending.future.done():
+            return
+        request = pending.request
+        if request.cancellation.reason is not None:
+            return
+        if (
+            request.deadline_monotonic is not None
+            and time.monotonic() >= request.deadline_monotonic
+        ):
+            request.cancellation.cancel(CancelReason.DEADLINE)
+            return
+        callback = pending.token_callback
+        if callback is not None:
+            callback(event)
 
     async def close(self, *, grace_seconds: float) -> None:
         if self._state is EngineState.CLOSED:

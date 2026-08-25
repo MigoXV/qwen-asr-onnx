@@ -17,7 +17,7 @@ from qwen_asr_onnx.engine.errors import (
     EngineUnavailableError,
 )
 from qwen_asr_onnx.engine.observability import log_event
-from qwen_asr_onnx.inferencers.asr import AsrInferencer
+from qwen_asr_onnx.inferencers.asr import AsrInferencer, AsrResult
 from qwen_asr_onnx.protos.asr.ux_speech_pb2 import (
     LanguageInfo,
     RecognitionConfig,
@@ -38,10 +38,10 @@ MAX_AUDIO_BYTES = MAX_PCM_SAMPLES * 2
 
 class ASRServicer(UxSpeechServicer):
     """
-    将流式 RPC 按一次性离线 ASR 请求处理。
+    将完整音频交给 AX650，并把 decoder token 作为累计文本流返回。
 
-    客户端仍使用流式协议，但服务端只读取配置消息后的第一段音频，
-    并将其视为完整音频。返回一次最终结果后结束 RPC。
+    当前仍只读取配置消息后的一个完整音频包；`interim_results` 控制文本是否
+    随 token 增量返回，不改变音频输入形态。
     """
 
     def __init__(self, inferencer: AsrInferencer) -> None:
@@ -53,7 +53,7 @@ class ASRServicer(UxSpeechServicer):
         request_iterator: AsyncIterator[StreamingRecognizeRequest],
         context: grpc.aio.ServicerContext,
     ) -> AsyncIterator[StreamingRecognizeResponse]:
-        """按一次性 ASR 请求处理单个 StreamingRecognize RPC 调用。"""
+        """处理完整音频，并按请求配置返回 token 级累计文本。"""
         # 加载会话配置，无有效配置则直接退出，有则解析
         streaming_config = await self._load_streaming_config(
             request_iterator=request_iterator,
@@ -68,10 +68,6 @@ class ASRServicer(UxSpeechServicer):
         )
         if audio_bytes is None:
             return
-        if streaming_config.interim_results:
-            logger.warning(
-                "AX650 returns final results only; interim_results is ignored."
-            )
         if streaming_config.config.hotwords:
             logger.warning(
                 "AX650 fixed prompt does not support hotwords; %d hotword(s) are ignored.",
@@ -82,6 +78,7 @@ class ASRServicer(UxSpeechServicer):
             audio_bytes=audio_bytes,
             sample_rate=sample_rate,
         )
+        request_started = time.monotonic()
         log_event(
             logger,
             "rpc_inference_start",
@@ -92,14 +89,47 @@ class ASRServicer(UxSpeechServicer):
             interim_results=streaming_config.interim_results,
         )
         try:
-            result = await self.inferencer.infer(
-                audio_bytes,
-                sample_rate=sample_rate,
-                language_code=streaming_config.config.language_code,
-                deadline_monotonic=self._deadline_monotonic(context),
-            )
-            if self._context_is_active(context):
-                yield self._make_response(result.transcript, result.language)
+            deadline_monotonic = self._deadline_monotonic(context)
+            result: AsrResult | None = None
+            interim_count = 0
+            first_interim_ms: float | None = None
+            if streaming_config.interim_results:
+                async for event in self.inferencer.stream(
+                    audio_bytes,
+                    sample_rate=sample_rate,
+                    language_code=streaming_config.config.language_code,
+                    deadline_monotonic=deadline_monotonic,
+                ):
+                    if not self._context_is_active(context):
+                        return
+                    if event.is_final:
+                        result = event.result
+                    else:
+                        interim_count += 1
+                        if first_interim_ms is None:
+                            first_interim_ms = (
+                                time.monotonic() - request_started
+                            ) * 1000.0
+                    yield self._make_response(
+                        event.transcript,
+                        event.language,
+                        is_final=event.is_final,
+                    )
+                if result is None:
+                    raise RuntimeError("streaming inference ended without final result")
+            else:
+                result = await self.inferencer.infer(
+                    audio_bytes,
+                    sample_rate=sample_rate,
+                    language_code=streaming_config.config.language_code,
+                    deadline_monotonic=deadline_monotonic,
+                )
+                if self._context_is_active(context):
+                    yield self._make_response(
+                        result.transcript,
+                        result.language,
+                        is_final=True,
+                    )
             metrics = result.metrics
             log_event(
                 logger,
@@ -107,6 +137,12 @@ class ASRServicer(UxSpeechServicer):
                 request_id=result.request_id,
                 audio_duration_seconds=round(audio_duration_seconds, 3),
                 transcript_chars=len(result.transcript),
+                interim_count=interim_count,
+                first_interim_ms=(
+                    round(first_interim_ms, 3)
+                    if first_interim_ms is not None
+                    else None
+                ),
                 queue_wait_ms=round(result.queue_wait_ms, 3),
                 engine_total_ms=round(result.engine_total_ms, 3),
                 preprocess_ms=round(metrics.preprocess_ms, 3),
@@ -287,8 +323,10 @@ class ASRServicer(UxSpeechServicer):
     def _make_response(
         transcript: str,
         language: str,
+        *,
+        is_final: bool,
     ) -> StreamingRecognizeResponse:
-        """构造不含模型协议前缀的最终响应。"""
+        """构造不含模型协议前缀的累计 interim 或 final 响应。"""
         return StreamingRecognizeResponse(
             results=[
                 StreamingRecognitionResult(
@@ -296,9 +334,9 @@ class ASRServicer(UxSpeechServicer):
                         transcript=transcript,
                         words=[],
                         language=LanguageInfo(code=language),
-                        turn_completed=True,
+                        turn_completed=is_final,
                     ),
-                    is_final=True,
+                    is_final=is_final,
                 )
             ]
         )

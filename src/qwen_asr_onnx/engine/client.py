@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from qwen_asr_onnx.engine.core import EngineCore
-from qwen_asr_onnx.engine.types import EngineSnapshot, InferenceResult
+from collections.abc import Callable
+
+from qwen_asr_onnx.engine.types import (
+    EngineSnapshot,
+    InferenceResult,
+    InferenceTokenEvent,
+)
 
 
 class EngineClient:
@@ -16,11 +22,13 @@ class EngineClient:
         *,
         sample_rate: int,
         deadline_monotonic: float | None,
+        token_callback: Callable[[InferenceTokenEvent], None] | None = None,
     ) -> InferenceResult:
         return await self._core.infer(
             pcm,
             sample_rate=sample_rate,
             deadline_monotonic=deadline_monotonic,
+            token_callback=token_callback,
         )
 
     def snapshot(self) -> EngineSnapshot:

@@ -56,3 +56,40 @@ def test_c_abi_only_allows_one_live_handle(fake_bindings, tmp_path: Path) -> Non
     lib.ax_qwen_asr_destroy(first[0])
     assert lib.ax_qwen_asr_create(str(tmp_path).encode(), second) == 0
     lib.ax_qwen_asr_destroy(second[0])
+
+
+def test_c_abi_streaming_callback_is_ordered(fake_bindings, tmp_path: Path) -> None:
+    ffi, lib = fake_bindings.ffi, fake_bindings.lib
+    handle = ffi.new("ax_qwen_asr_handle **")
+    assert lib.ax_qwen_asr_create(str(tmp_path).encode(), handle) == 0
+    events: list[tuple[int, int, bytes]] = []
+
+    @ffi.callback("int(uint32_t, size_t, const char *, size_t, void *)")
+    def callback(token_id, token_index, delta, delta_size, _user_data):
+        events.append(
+            (int(token_id), int(token_index), bytes(ffi.buffer(delta, delta_size)))
+        )
+        return 0
+
+    sample = ffi.new("int16_t[]", [0])
+    output = ffi.new("char[]", 4096)
+    required = ffi.new("size_t *")
+    try:
+        assert (
+            lib.ax_qwen_asr_transcribe_pcm16_stream(
+                handle[0],
+                sample,
+                1,
+                16000,
+                callback,
+                ffi.NULL,
+                output,
+                4096,
+                required,
+            )
+            == 0
+        )
+        assert [event[1] for event in events] == list(range(len(events)))
+        assert b"".join(event[2] for event in events) == ffi.string(output)
+    finally:
+        lib.ax_qwen_asr_destroy(handle[0])

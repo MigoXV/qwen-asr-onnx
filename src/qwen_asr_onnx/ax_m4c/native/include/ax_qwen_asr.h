@@ -18,6 +18,17 @@ extern "C" {
 
 typedef struct ax_qwen_asr_handle ax_qwen_asr_handle;
 
+/*
+ * 返回 0 继续生成；返回非 0 时在当前 token 边界提前结束并返回已生成文本。
+ * utf8_delta 仅在 callback 调用期间有效，调用方需要保留时必须立即复制。
+ */
+typedef int (*ax_qwen_asr_token_callback)(
+    uint32_t token_id,
+    size_t token_index,
+    const char *utf8_delta,
+    size_t utf8_delta_size,
+    void *user_data);
+
 typedef enum ax_qwen_asr_error_code {
     AX_QWEN_ASR_OK = 0,
     AX_QWEN_ASR_INVALID_ARGUMENT = 1,
@@ -57,6 +68,17 @@ AX_QWEN_ASR_API int ax_qwen_asr_transcribe_pcm16(
     const int16_t *samples,
     size_t sample_count,
     int sample_rate,
+    char *output,
+    size_t output_capacity,
+    size_t *required_size);
+
+AX_QWEN_ASR_API int ax_qwen_asr_transcribe_pcm16_stream(
+    ax_qwen_asr_handle *handle,
+    const int16_t *samples,
+    size_t sample_count,
+    int sample_rate,
+    ax_qwen_asr_token_callback callback,
+    void *user_data,
     char *output,
     size_t output_capacity,
     size_t *required_size);

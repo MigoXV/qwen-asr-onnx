@@ -29,7 +29,8 @@ QwenAsrRunner::QwenAsrRunner(const std::string& model_dir)
     : impl_(std::make_unique<Impl>(model_dir)) {}
 QwenAsrRunner::~QwenAsrRunner() = default;
 void QwenAsrRunner::Warmup() { throw AxEngineError("AXEngine 设备后端不可用"); }
-std::string QwenAsrRunner::Transcribe(const std::int16_t*, std::size_t, int) {
+std::string QwenAsrRunner::Transcribe(
+    const std::int16_t*, std::size_t, int, const TokenCallback&) {
     throw AxEngineError("AXEngine 设备后端不可用");
 }
 const RunnerMetrics& QwenAsrRunner::LastMetrics() const noexcept { return impl_->metrics; }
@@ -286,18 +287,20 @@ public:
 
     void Warmup() {
         std::vector<std::int16_t> silence(kSampleRate, 0);
-        (void)TranscribeInternal(silence.data(), silence.size(), 1);
+        (void)TranscribeInternal(silence.data(), silence.size(), 1, {});
     }
 
     std::string Transcribe(
         const std::int16_t* samples,
         std::size_t sample_count,
-        int sample_rate) {
+        int sample_rate,
+        const QwenAsrRunner::TokenCallback& callback) {
         if (sample_rate != kSampleRate) {
             throw std::invalid_argument(
                 "固定 profile 只接受 16000 Hz PCM16，收到 " + std::to_string(sample_rate));
         }
-        return TranscribeInternal(samples, sample_count, kMaxGeneratedTokens);
+        return TranscribeInternal(
+            samples, sample_count, kMaxGeneratedTokens, callback);
     }
 
     const RunnerMetrics& LastMetrics() const noexcept { return metrics_; }
@@ -614,7 +617,8 @@ private:
     std::string TranscribeInternal(
         const std::int16_t* samples,
         std::size_t sample_count,
-        std::size_t generation_limit) {
+        std::size_t generation_limit,
+        const QwenAsrRunner::TokenCallback& callback) {
         if (!samples) throw std::invalid_argument("samples 不能为空");
         if (sample_count == 0) throw std::invalid_argument("PCM16 不能为空");
 
@@ -634,18 +638,20 @@ private:
         const auto first_token_time = Clock::now();
         std::vector<std::uint32_t> generated;
         generated.reserve(generation_limit);
+        std::string text;
+        text.reserve(generation_limit * 4);
         for (std::size_t index = 0; index < generation_limit; ++index) {
             if (next_token == kImEndId || next_token == kEndOfTextId) break;
             generated.push_back(next_token);
+            const std::string delta = DecodeAsrToken(*tokenizer_, next_token);
+            text += delta;
+            if (callback && !callback(next_token, index, delta)) break;
             const std::size_t position = prompt_ids.size() + index;
             if (index + 1 >= generation_limit || position >= kMaxContextTokens - 1) break;
             next_token = DecodeStep(next_token, position);
         }
         const auto decoder_end = Clock::now();
 
-        std::string text;
-        text.reserve(generated.size() * 4);
-        for (const std::uint32_t token : generated) text += DecodeAsrToken(*tokenizer_, token);
         const auto total_end = Clock::now();
 
         metrics_.sample_count = sample_count;
@@ -689,8 +695,9 @@ void QwenAsrRunner::Warmup() { impl_->Warmup(); }
 std::string QwenAsrRunner::Transcribe(
     const std::int16_t* samples,
     std::size_t sample_count,
-    int sample_rate) {
-    return impl_->Transcribe(samples, sample_count, sample_rate);
+    int sample_rate,
+    const TokenCallback& callback) {
+    return impl_->Transcribe(samples, sample_count, sample_rate, callback);
 }
 
 const RunnerMetrics& QwenAsrRunner::LastMetrics() const noexcept {

@@ -3,7 +3,11 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from qwen_asr_onnx.runners.base import ModelRunner, RunnerOutput
+from qwen_asr_onnx.runners.base import (
+    ModelRunner,
+    RunnerOutput,
+    RunnerTokenCallback,
+)
 
 
 class RuntimeState(str, Enum):
@@ -52,6 +56,21 @@ class AxRuntime:
         if self._state is not RuntimeState.READY:
             raise RuntimeError(f"AX runtime is not ready: {self._state.value}")
         return self._runner.infer_pcm16(pcm, sample_rate=sample_rate)
+
+    def execute_stream(
+        self,
+        pcm: bytes,
+        *,
+        sample_rate: int,
+        token_callback: RunnerTokenCallback,
+    ) -> RunnerOutput:
+        if self._state is not RuntimeState.READY:
+            raise RuntimeError(f"AX runtime is not ready: {self._state.value}")
+        return self._runner.infer_pcm16_stream(
+            pcm,
+            sample_rate=sample_rate,
+            token_callback=token_callback,
+        )
 
     def close(self) -> None:
         if self._state is RuntimeState.CLOSED:
