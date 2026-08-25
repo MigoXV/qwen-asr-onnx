@@ -5,10 +5,7 @@ import asyncio
 import grpc
 import pytest
 
-from qwen_asr_onnx.ax_m4c import TranscriptionMetrics
-from qwen_asr_onnx.configs import AppConfig
-from qwen_asr_onnx.inferencers.ax_engine import AxInferenceResult
-from qwen_asr_onnx.inferencers.grpc_inferencer import GrpcInferencer
+from qwen_asr_onnx.inferencers.asr import AsrResult
 from qwen_asr_onnx.protos.asr.ux_speech_pb2 import (
     RecognitionConfig,
     StreamingRecognizeRequest,
@@ -19,17 +16,29 @@ from qwen_asr_onnx.protos.asr.ux_speech_pb2_grpc import (
     add_UxSpeechServicer_to_server,
 )
 from qwen_asr_onnx.servicer.servicer import ASRServicer, MAX_AUDIO_BYTES
+from qwen_asr_onnx.runners.base import RunnerMetrics
 
 
-METRICS = TranscriptionMetrics(80, 1, 1, 1, 2, 1, 2, 3, 4, 10)
+METRICS = RunnerMetrics(80, 1, 1, 1, 2, 1, 2, 3, 4, 10)
 
 
-class FakeEngine:
-    async def transcribe_pcm16(self, audio_bytes: bytes, *, sample_rate: int):
+class FakeInferencer:
+    async def infer(
+        self,
+        audio_bytes: bytes,
+        *,
+        sample_rate: int,
+        language_code: str,
+        deadline_monotonic: float | None,
+    ) -> AsrResult:
         assert audio_bytes == b"\0\0" * 80
         assert sample_rate == 16000
-        return AxInferenceResult(
-            raw_output="language Chinese<asr_text>干净的识别结果",
+        return AsrResult(
+            transcript="干净的识别结果",
+            language="Chinese",
+            request_id="request-1",
+            queue_wait_ms=1.0,
+            engine_total_ms=10.0,
             metrics=METRICS,
         )
 
@@ -52,10 +61,7 @@ async def _requests(sample_rate: int = 16000, audio: bytes = b"\0\0" * 80):
 def test_real_grpc_transport_returns_clean_final_result() -> None:
     async def scenario() -> None:
         server = grpc.aio.server()
-        servicer = ASRServicer(
-            AppConfig(model="unused"),
-            GrpcInferencer(FakeEngine()),
-        )
+        servicer = ASRServicer(FakeInferencer())
         add_UxSpeechServicer_to_server(servicer, server)
         port = server.add_insecure_port("127.0.0.1:0")
         await server.start()
@@ -86,7 +92,7 @@ def test_real_grpc_transport_rejects_non_16k_audio() -> None:
     async def scenario() -> None:
         server = grpc.aio.server()
         add_UxSpeechServicer_to_server(
-            ASRServicer(AppConfig(model="unused"), GrpcInferencer(FakeEngine())),
+            ASRServicer(FakeInferencer()),
             server,
         )
         port = server.add_insecure_port("127.0.0.1:0")
@@ -119,7 +125,7 @@ def test_real_grpc_transport_rejects_invalid_pcm(audio: bytes, message: str) -> 
     async def scenario() -> None:
         server = grpc.aio.server()
         add_UxSpeechServicer_to_server(
-            ASRServicer(AppConfig(model="unused"), GrpcInferencer(FakeEngine())),
+            ASRServicer(FakeInferencer()),
             server,
         )
         port = server.add_insecure_port("127.0.0.1:0")

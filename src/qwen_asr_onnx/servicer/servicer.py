@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 
 import grpc
@@ -10,12 +11,13 @@ from qwen_asr_onnx.ax_m4c.errors import (
     AxQwenAsrError,
     AxQwenAsrInvalidArgumentError,
 )
-from qwen_asr_onnx.configs import AppConfig
-from qwen_asr_onnx.inferencers.ax_engine import (
-    AxEngineClosedError,
-    AxQueueFullError,
+from qwen_asr_onnx.engine.errors import (
+    EngineDeadlineExceededError,
+    EngineResourceExhaustedError,
+    EngineUnavailableError,
 )
-from qwen_asr_onnx.inferencers.grpc_inferencer import GrpcInferencer
+from qwen_asr_onnx.engine.observability import log_event
+from qwen_asr_onnx.inferencers.asr import AsrInferencer
 from qwen_asr_onnx.protos.asr.ux_speech_pb2 import (
     LanguageInfo,
     RecognitionConfig,
@@ -42,13 +44,9 @@ class ASRServicer(UxSpeechServicer):
     并将其视为完整音频。返回一次最终结果后结束 RPC。
     """
 
-    def __init__(self, config: AppConfig, inferencer: GrpcInferencer) -> None:
+    def __init__(self, inferencer: AsrInferencer) -> None:
         super().__init__()
         self.inferencer = inferencer
-        if config.context:
-            logger.warning(
-                "AX650 fixed prompt does not support context; configured context is ignored."
-            )
 
     async def StreamingRecognize(
         self,
@@ -84,45 +82,55 @@ class ASRServicer(UxSpeechServicer):
             audio_bytes=audio_bytes,
             sample_rate=sample_rate,
         )
-        logger.info(
-            "Starting inference: audio_bytes=%d, sample_rate=%d, language_code=%s, "
-            "audio_duration_seconds=%.3f, interim_results=%s",
-            len(audio_bytes),
-            sample_rate,
-            streaming_config.config.language_code,
-            audio_duration_seconds,
-            streaming_config.interim_results,
+        log_event(
+            logger,
+            "rpc_inference_start",
+            audio_bytes=len(audio_bytes),
+            sample_rate=sample_rate,
+            language_code=streaming_config.config.language_code,
+            audio_duration_seconds=round(audio_duration_seconds, 3),
+            interim_results=streaming_config.interim_results,
         )
         try:
             result = await self.inferencer.infer(
-                audio_bytes=audio_bytes,
+                audio_bytes,
                 sample_rate=sample_rate,
                 language_code=streaming_config.config.language_code,
+                deadline_monotonic=self._deadline_monotonic(context),
             )
             if self._context_is_active(context):
                 yield self._make_response(result.transcript, result.language)
-            metrics = result.inference.metrics
-            logger.info(
-                "Inference metrics: preprocess_ms=%.3f, encoder_ms=%.3f, "
-                "decoder_ttft_ms=%.3f, decoder_ms=%.3f, native_total_ms=%.3f",
-                metrics.preprocess_ms,
-                metrics.encoder_ms,
-                metrics.decoder_ttft_ms,
-                metrics.decoder_ms,
-                metrics.native_total_ms,
+            metrics = result.metrics
+            log_event(
+                logger,
+                "rpc_inference_complete",
+                request_id=result.request_id,
+                audio_duration_seconds=round(audio_duration_seconds, 3),
+                transcript_chars=len(result.transcript),
+                queue_wait_ms=round(result.queue_wait_ms, 3),
+                engine_total_ms=round(result.engine_total_ms, 3),
+                preprocess_ms=round(metrics.preprocess_ms, 3),
+                encoder_ms=round(metrics.encoder_ms, 3),
+                decoder_ttft_ms=round(metrics.decoder_ttft_ms, 3),
+                decoder_ms=round(metrics.decoder_ms, 3),
+                native_total_ms=round(metrics.native_total_ms, 3),
             )
         except asyncio.CancelledError:
             logger.info("StreamingRecognize cancelled by client.")
             return
-        except AxQueueFullError as exc:
+        except EngineResourceExhaustedError as exc:
             logger.warning("Inference rejected: %s", exc)
             await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, str(exc))
+            return
+        except EngineDeadlineExceededError as exc:
+            logger.warning("Inference deadline exceeded: %s", exc)
+            await context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, str(exc))
             return
         except AxQwenAsrInvalidArgumentError as exc:
             logger.warning("Invalid inference input: %s", exc)
             await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             return
-        except AxEngineClosedError as exc:
+        except EngineUnavailableError as exc:
             logger.error("AX inference engine unavailable: %s", exc)
             await context.abort(grpc.StatusCode.UNAVAILABLE, str(exc))
             return
@@ -140,11 +148,6 @@ class ASRServicer(UxSpeechServicer):
                 f"Inference failed: {exc}",
             )
             return
-        logger.info(
-            "Inference finished: audio_duration_seconds=%.3f, transcript_chars=%d",
-            audio_duration_seconds,
-            len(result.transcript),
-        )
 
     @staticmethod
     def _calculate_audio_duration_seconds(
@@ -267,6 +270,18 @@ class ASRServicer(UxSpeechServicer):
                 logger.debug("Failed to query context.is_active()", exc_info=True)
 
         return True
+
+    @staticmethod
+    def _deadline_monotonic(
+        context: grpc.aio.ServicerContext,
+    ) -> float | None:
+        time_remaining = getattr(context, "time_remaining", None)
+        if not callable(time_remaining):
+            return None
+        remaining = time_remaining()
+        if remaining is None:
+            return None
+        return time.monotonic() + max(0.0, float(remaining))
 
     @staticmethod
     def _make_response(

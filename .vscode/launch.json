@@ -10,9 +10,7 @@
             "request": "launch",
             "module": "qwen_asr_onnx.commands.app",
             "args": [
-                "serve",
-                "--config",
-                "examples/ax-m4c/grpc.yaml"
+                "serve"
             ],
             "console": "integratedTerminal",
             "envFile": "${workspaceFolder}/.env"
